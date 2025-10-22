@@ -52,7 +52,7 @@ class CustomWKWebView: WKWebView {
         // 기본 네비게이션 항목들
         let backItem = NSMenuItem(
             title: "뒤로",
-            action: #selector(goBack),
+            action: #selector(webViewGoBack),
             keyEquivalent: ""
         )
         backItem.isEnabled = canGoBack
@@ -60,7 +60,7 @@ class CustomWKWebView: WKWebView {
 
         let forwardItem = NSMenuItem(
             title: "앞으로",
-            action: #selector(goForward),
+            action: #selector(webViewGoForward),
             keyEquivalent: ""
         )
         forwardItem.isEnabled = canGoForward
@@ -68,7 +68,7 @@ class CustomWKWebView: WKWebView {
 
         let reloadItem = NSMenuItem(
             title: "새로고침",
-            action: #selector(reload),
+            action: #selector(webViewReload),
             keyEquivalent: ""
         )
         menu.addItem(reloadItem)
@@ -81,6 +81,18 @@ class CustomWKWebView: WKWebView {
             print("🌐 기본 브라우저에서 열기: \(url.absoluteString)")
             NSWorkspace.shared.open(url)
         }
+    }
+
+    @objc private func webViewGoBack() {
+        (self as WKWebView).goBack()
+    }
+
+    @objc private func webViewGoForward() {
+        (self as WKWebView).goForward()
+    }
+
+    @objc private func webViewReload() {
+        (self as WKWebView).reload()
     }
 }
 
