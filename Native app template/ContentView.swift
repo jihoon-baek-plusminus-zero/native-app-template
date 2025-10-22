@@ -12,11 +12,11 @@ import WebKit
 /// 타이틀바 영역: 드래그로 윈도우 이동
 /// 일반 영역: 웹뷰 클릭 정상 작동
 class DraggableWKWebView: WKWebView {
-    var titlebarHeight: CGFloat {
-        // Config에서 타이틀바 높이 가져오기
-        let heightString = AppConfig.titlebar_height.replacingOccurrences(of: "px", with: "").trimmingCharacters(in: .whitespaces)
-        return CGFloat(Double(heightString) ?? 40.0)
-    }
+    // ========================================
+    // 투명 타이틀바 높이: 60px 고정
+    // (extra_titlebar 공백과는 별개)
+    // ========================================
+    private let titlebarHeight: CGFloat = 60.0
 
     private var mouseDownEvent: NSEvent?
     private var isDraggingWindow = false
@@ -106,6 +106,7 @@ class DraggableWKWebView: WKWebView {
 // MARK: - WebView Wrapper
 struct WebView: NSViewRepresentable {
     let url: String
+    var onBackgroundColorDetected: ((Color) -> Void)?
 
     func makeNSView(context: Context) -> DraggableWKWebView {
         // WKWebView 설정
@@ -176,12 +177,18 @@ struct WebView: NSViewRepresentable {
     }
     
     func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(onBackgroundColorDetected: onBackgroundColorDetected)
     }
-    
+
     // Coordinator: 새 창 요청을 시스템 브라우저로 전달 + 성능 모니터링
     class Coordinator: NSObject, WKUIDelegate, WKNavigationDelegate {
         var hasLoadedInitialURL = false  // 중복 로드 방지 플래그
+        var onBackgroundColorDetected: ((Color) -> Void)?
+
+        init(onBackgroundColorDetected: ((Color) -> Void)?) {
+            self.onBackgroundColorDetected = onBackgroundColorDetected
+            super.init()
+        }
 
         // MARK: - WKUIDelegate
         func webView(_ webView: WKWebView,
@@ -223,6 +230,87 @@ struct WebView: NSViewRepresentable {
             }
             """
             webView.evaluateJavaScript(optimizationScript, completionHandler: nil)
+
+            // ========================================
+            // BACKGROUND COLOR DETECTION: 웹사이트 배경색 감지
+            // ========================================
+            // extra_titlebar가 true이고, 커스텀 색상이 아닐 때만 감지
+            if AppConfig.extra_titlebar && !AppConfig.extra_titlebar_custom_color {
+                detectBackgroundColor(webView: webView)
+            }
+        }
+
+        // 웹사이트 배경색 감지
+        private func detectBackgroundColor(webView: WKWebView) {
+            let script = """
+            (function() {
+                // body 배경색 가져오기
+                var bodyBg = window.getComputedStyle(document.body).backgroundColor;
+
+                // html 배경색도 확인
+                var htmlBg = window.getComputedStyle(document.documentElement).backgroundColor;
+
+                // 투명한 경우 html 배경색 사용
+                var bgColor = bodyBg;
+                if (bodyBg === 'rgba(0, 0, 0, 0)' || bodyBg === 'transparent') {
+                    bgColor = htmlBg;
+                }
+
+                // 여전히 투명하면 흰색 사용
+                if (bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'transparent') {
+                    bgColor = 'rgb(255, 255, 255)';
+                }
+
+                return bgColor;
+            })();
+            """
+
+            webView.evaluateJavaScript(script) { [weak self] result, error in
+                guard let self = self else { return }
+
+                if let error = error {
+                    print("❌ [Background] 배경색 감지 실패: \(error.localizedDescription)")
+                    return
+                }
+
+                if let colorString = result as? String {
+                    print("🎨 [Background] 감지된 배경색: \(colorString)")
+                    let color = self.parseColor(from: colorString)
+                    DispatchQueue.main.async {
+                        self.onBackgroundColorDetected?(color)
+                    }
+                }
+            }
+        }
+
+        // CSS 색상 문자열을 SwiftUI Color로 변환
+        private func parseColor(from cssColor: String) -> Color {
+            // rgb(r, g, b) 또는 rgba(r, g, b, a) 형식 파싱
+            let pattern = "rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)"
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: cssColor, range: NSRange(cssColor.startIndex..., in: cssColor)) else {
+                print("⚠️ [Background] 색상 파싱 실패, 기본값 사용: \(cssColor)")
+                return .white
+            }
+
+            let r = (cssColor as NSString).substring(with: match.range(at: 1))
+            let g = (cssColor as NSString).substring(with: match.range(at: 2))
+            let b = (cssColor as NSString).substring(with: match.range(at: 3))
+
+            guard let red = Double(r), let green = Double(g), let blue = Double(b) else {
+                return .white
+            }
+
+            let color = Color(
+                .sRGB,
+                red: red / 255.0,
+                green: green / 255.0,
+                blue: blue / 255.0,
+                opacity: 1.0
+            )
+
+            print("✅ [Background] 변환된 색상: RGB(\(red), \(green), \(blue))")
+            return color
         }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
@@ -268,6 +356,20 @@ struct WebView: NSViewRepresentable {
 
 // MARK: - Main View
 struct ContentView: View {
+    // 웹사이트 배경색 저장 (기본값: 흰색)
+    @State private var websiteBackgroundColor: Color = .white
+
+    // 타이틀바 배경색 계산 (커스텀 색상 또는 자동 감지)
+    private var titlebarBackgroundColor: Color {
+        if AppConfig.extra_titlebar_custom_color {
+            // 커스텀 색상 사용
+            return Color(hex: AppConfig.titlebar_color)
+        } else {
+            // 웹사이트 배경색 자동 감지
+            return websiteBackgroundColor
+        }
+    }
+
     var body: some View {
         // ========================================
         // Arc/VSCode 스타일: 투명 타이틀바 + 전체 화면 웹뷰
@@ -276,8 +378,40 @@ struct ContentView: View {
         // 타이틀바 영역의 드래그/클릭을 자동으로 처리합니다.
 
         if !AppConfig.targetURL.isEmpty {
-            WebView(url: AppConfig.targetURL)
+            if AppConfig.extra_titlebar {
+                // ========================================
+                // extra_titlebar = true: 타이틀바 공백 영역 추가
+                // ========================================
+                VStack(spacing: 0) {
+                    // 타이틀바 높이만큼 공백
+                    // - custom_color = true: titlebar_color 사용
+                    // - custom_color = false: 웹사이트 배경색 사용
+                    Rectangle()
+                        .fill(titlebarBackgroundColor)
+                        .frame(height: pxToCGFloat(AppConfig.titlebar_height))
+
+                    // 웹뷰 (타이틀바 아래부터 시작)
+                    WebView(
+                        url: AppConfig.targetURL,
+                        onBackgroundColorDetected: { color in
+                            // 커스텀 색상 모드가 아닐 때만 업데이트
+                            if !AppConfig.extra_titlebar_custom_color {
+                                websiteBackgroundColor = color
+                            }
+                        }
+                    )
+                }
+                .ignoresSafeArea()
+            } else {
+                // ========================================
+                // extra_titlebar = false: 웹뷰 전체 화면
+                // ========================================
+                WebView(
+                    url: AppConfig.targetURL,
+                    onBackgroundColorDetected: { _ in }  // 배경색 무시
+                )
                 .ignoresSafeArea()  // Safe area 무시 → 타이틀바까지 확장
+            }
         } else {
             VStack {
                 ProgressView()
@@ -288,6 +422,12 @@ struct ContentView: View {
                     .foregroundColor(.red)
             }
         }
+    }
+
+    // px 문자열을 CGFloat로 변환
+    private func pxToCGFloat(_ pxString: String) -> CGFloat {
+        let numberString = pxString.replacingOccurrences(of: "px", with: "").trimmingCharacters(in: .whitespaces)
+        return CGFloat(Double(numberString) ?? 40.0)
     }
 }
 
