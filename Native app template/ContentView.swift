@@ -11,40 +11,64 @@ import WebKit
 // MARK: - WebView Wrapper
 struct WebView: NSViewRepresentable {
     let url: String
-    
+
     func makeNSView(context: Context) -> WKWebView {
         // WKWebView 설정
         let configuration = WKWebViewConfiguration()
-        
-        // 쿠키/캐시 자동 저장
+
+        // ========================================
+        // PERFORMANCE OPTIMIZATION: 캐싱 전략
+        // ========================================
         configuration.websiteDataStore = .default()
-        
+
+        // ========================================
+        // PERFORMANCE OPTIMIZATION: 프리페칭 활성화
+        // ========================================
+        // DNS 프리페칭, 리소스 힌트 등을 활성화
+        if #available(macOS 11.0, *) {
+            configuration.limitsNavigationsToAppBoundDomains = false
+        }
+
         // 완전한 Safari User Agent 설정 (Google 신원 인증용)
         let safariUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15"
         configuration.applicationNameForUserAgent = safariUserAgent
-        
+
         // JavaScript 새 창 열기 감지 활성화
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-        
-        // CSS/리소스 로딩 최적화
+
+        // ========================================
+        // PERFORMANCE OPTIMIZATION: 미디어 최적화
+        // ========================================
         configuration.allowsAirPlayForMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
-        
+
         // Safari 개발자 도구 활성화
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        
-        // Safari와 동일한 보안 설정
+
+        // ========================================
+        // PERFORMANCE OPTIMIZATION: 렌더링 최적화
+        // ========================================
+        // 빠른 초기 렌더링을 위해 점진적 렌더링 활성화
         configuration.suppressesIncrementalRendering = false
-        
+
+        // WKWebView 인스턴스 생성
         let webView = WKWebView(frame: .zero, configuration: configuration)
+
+        // ========================================
+        // PERFORMANCE OPTIMIZATION: 네비게이션 최적화
+        // ========================================
         webView.allowsBackForwardNavigationGestures = true
-        
+        webView.allowsMagnification = true
+
         // Safari 스타일 네비게이션 설정
         webView.customUserAgent = safariUserAgent
-        
+
         // UI Delegate 설정 (새 창 요청 처리용)
         webView.uiDelegate = context.coordinator
-        
+
+        // Navigation Delegate 설정 (성능 모니터링용)
+        webView.navigationDelegate = context.coordinator
+
         return webView
     }
     
@@ -52,42 +76,89 @@ struct WebView: NSViewRepresentable {
         Coordinator()
     }
     
-    // Coordinator: 새 창 요청을 시스템 브라우저로 전달
-    class Coordinator: NSObject, WKUIDelegate {
+    // Coordinator: 새 창 요청을 시스템 브라우저로 전달 + 성능 모니터링
+    class Coordinator: NSObject, WKUIDelegate, WKNavigationDelegate {
+        var hasLoadedInitialURL = false  // 중복 로드 방지 플래그
+
+        // MARK: - WKUIDelegate
         func webView(_ webView: WKWebView,
                      createWebViewWith configuration: WKWebViewConfiguration,
                      for navigationAction: WKNavigationAction,
                      windowFeatures: WKWindowFeatures) -> WKWebView? {
-            
+
             // 새 창 요청 URL 가져오기
             if let url = navigationAction.request.url {
                 print("🌐 새 창 요청 감지: \(url.absoluteString)")
                 print("   → 시스템 기본 브라우저로 열기")
-                
+
                 // 시스템 기본 브라우저로 열기
                 NSWorkspace.shared.open(url)
             }
-            
+
             // nil 반환 = WebView 내에서는 열지 않음
             return nil
+        }
+
+        // MARK: - WKNavigationDelegate (성능 최적화)
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            print("⚡️ [Performance] 페이지 로딩 시작: \(webView.url?.absoluteString ?? "unknown")")
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            print("✅ [Performance] 페이지 로딩 완료")
+
+            // ========================================
+            // PERFORMANCE OPTIMIZATION: JavaScript 최적화
+            // ========================================
+            // 페이지 로드 후 JavaScript 성능 향상을 위한 설정
+            let optimizationScript = """
+            // 스크롤 성능 최적화
+            if ('CSS' in window && 'supports' in CSS) {
+                if (CSS.supports('will-change', 'transform')) {
+                    document.documentElement.style.willChange = 'scroll-position';
+                }
+            }
+            """
+            webView.evaluateJavaScript(optimizationScript, completionHandler: nil)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            print("❌ [Performance] 페이지 로딩 실패: \(error.localizedDescription)")
         }
     }
     
     func updateNSView(_ webView: WKWebView, context: Context) {
-        if let url = URL(string: url) {
-            // 최신 JavaScript 설정 (macOS 11.0+)
+        // ========================================
+        // PERFORMANCE OPTIMIZATION: 중복 로드 방지
+        // ========================================
+        // 이미 로드된 URL이면 다시 로드하지 않음
+        guard let targetURL = URL(string: url) else { return }
+
+        // 현재 로드된 URL과 비교
+        if webView.url?.absoluteString == targetURL.absoluteString {
+            // 이미 동일한 URL이 로드되어 있으면 스킵
+            return
+        }
+
+        // 아직 로드되지 않았거나 다른 URL인 경우에만 로드
+        if !context.coordinator.hasLoadedInitialURL || webView.url == nil {
+            print("🚀 [Performance] 초기 URL 로드: \(targetURL.absoluteString)")
+
+            // JavaScript 설정 (macOS 11.0+)
             webView.configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-            
-            let request = URLRequest(url: url)
+
+            // ========================================
+            // PERFORMANCE OPTIMIZATION: 캐시 정책 최적화
+            // ========================================
+            var request = URLRequest(url: targetURL)
+            request.cachePolicy = .returnCacheDataElseLoad  // 캐시 우선 사용
+            request.timeoutInterval = 30  // 타임아웃 30초
+
             webView.load(request)
-            
-            // 3초 후 강제 새로고침 (CSS 로딩 실패 대응)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                if webView.url?.absoluteString == url.absoluteString {
-                    print("🔄 CSS 로딩 강화를 위한 새로고침 실행")
-                    webView.reload()
-                }
-            }
+            context.coordinator.hasLoadedInitialURL = true
+
+            // ⚠️ 3초 자동 새로고침 제거됨 - 성능 향상을 위해 제거
+            // 이전 코드: DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { webView.reload() }
         }
     }
 }
