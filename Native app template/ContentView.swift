@@ -8,86 +8,199 @@
 import SwiftUI
 import WebKit
 
+// MARK: - Custom WKWebView with Context Menu
+class CustomWKWebView: WKWebView {
+    var lastClickedURL: URL?
+
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        // 마우스 클릭 위치에서 링크 URL 찾기
+        let point = convert(event.locationInWindow, from: nil)
+
+        // JavaScript로 클릭된 요소의 링크 가져오기
+        evaluateJavaScript("""
+            (function() {
+                var element = document.elementFromPoint(\(point.x), \(point.y));
+                while (element && element.tagName !== 'A') {
+                    element = element.parentElement;
+                }
+                if (element && element.tagName === 'A') {
+                    return element.href;
+                }
+                return null;
+            })();
+        """) { [weak self] result, error in
+            if let urlString = result as? String, let url = URL(string: urlString) {
+                self?.lastClickedURL = url
+            }
+        }
+
+        // 기존 메뉴 항목 제거 (불필요한 항목들)
+        menu.removeAllItems()
+
+        // 링크가 있는 경우 "기본 웹 브라우저에서 열기" 추가
+        if lastClickedURL != nil {
+            let openInBrowserItem = NSMenuItem(
+                title: "기본 웹 브라우저에서 열기",
+                action: #selector(openInDefaultBrowser),
+                keyEquivalent: ""
+            )
+            openInBrowserItem.target = self
+            menu.addItem(openInBrowserItem)
+            menu.addItem(NSMenuItem.separator())
+        }
+
+        // 기본 네비게이션 항목들
+        let backItem = NSMenuItem(
+            title: "뒤로",
+            action: #selector(goBack),
+            keyEquivalent: ""
+        )
+        backItem.isEnabled = canGoBack
+        menu.addItem(backItem)
+
+        let forwardItem = NSMenuItem(
+            title: "앞으로",
+            action: #selector(goForward),
+            keyEquivalent: ""
+        )
+        forwardItem.isEnabled = canGoForward
+        menu.addItem(forwardItem)
+
+        let reloadItem = NSMenuItem(
+            title: "새로고침",
+            action: #selector(reload),
+            keyEquivalent: ""
+        )
+        menu.addItem(reloadItem)
+
+        super.willOpenMenu(menu, with: event)
+    }
+
+    @objc private func openInDefaultBrowser() {
+        if let url = lastClickedURL {
+            print("🌐 기본 브라우저에서 열기: \(url.absoluteString)")
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
 // MARK: - WebView Wrapper
 struct WebView: NSViewRepresentable {
     let url: String
-    
-    func makeNSView(context: Context) -> WKWebView {
+
+    func makeNSView(context: Context) -> CustomWKWebView {
         // WKWebView 설정
         let configuration = WKWebViewConfiguration()
-        
+
         // 쿠키/캐시 자동 저장
         configuration.websiteDataStore = .default()
-        
+
         // 완전한 Safari User Agent 설정 (Google 신원 인증용)
         let safariUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15"
         configuration.applicationNameForUserAgent = safariUserAgent
-        
+
         // JavaScript 새 창 열기 감지 활성화
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-        
+
         // CSS/리소스 로딩 최적화
         configuration.allowsAirPlayForMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
-        
+
         // Safari 개발자 도구 활성화
         configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        
+
         // Safari와 동일한 보안 설정
         configuration.suppressesIncrementalRendering = false
-        
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+
+        // ⚡ 성능 최적화 설정
+        // 1. 하드웨어 가속 및 GPU 렌더링 최적화
+        configuration.preferences.setValue(true, forKey: "acceleratedDrawingEnabled")
+        configuration.preferences.setValue(true, forKey: "canvasUsesAcceleratedDrawing")
+        configuration.preferences.setValue(true, forKey: "webGLEnabled")
+
+        // 2. 메모리 캐시 최적화
+        configuration.preferences.setValue(true, forKey: "offlineWebApplicationCacheEnabled")
+
+        // 3. 이미지 및 애니메이션 성능 향상
+        configuration.preferences.setValue(true, forKey: "compositingBordersVisible")
+        configuration.preferences.setValue(true, forKey: "compositingRepaintCountersVisible")
+
+        let webView = CustomWKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
-        
+
         // Safari 스타일 네비게이션 설정
         webView.customUserAgent = safariUserAgent
-        
+
+        // ⚡ 렌더링 성능 최적화
+        webView.setValue(true, forKey: "drawsBackground")
+
+        // Layer 백업 설정으로 애니메이션 성능 향상
+        if let layer = webView.layer {
+            layer.drawsAsynchronously = true  // 비동기 렌더링
+            layer.shouldRasterize = false     // 래스터화는 비활성화 (동적 콘텐츠에 유리)
+        }
+
         // UI Delegate 설정 (새 창 요청 처리용)
         webView.uiDelegate = context.coordinator
-        
+
+        // Navigation Delegate 설정 (링크 처리용)
+        webView.navigationDelegate = context.coordinator
+
         return webView
     }
-    
+
     func makeCoordinator() -> Coordinator {
         Coordinator()
     }
-    
+
     // Coordinator: 새 창 요청을 시스템 브라우저로 전달
-    class Coordinator: NSObject, WKUIDelegate {
+    class Coordinator: NSObject, WKUIDelegate, WKNavigationDelegate {
+        // 새 창/새 탭 요청을 기본 브라우저로 전달
         func webView(_ webView: WKWebView,
                      createWebViewWith configuration: WKWebViewConfiguration,
                      for navigationAction: WKNavigationAction,
                      windowFeatures: WKWindowFeatures) -> WKWebView? {
-            
+
             // 새 창 요청 URL 가져오기
             if let url = navigationAction.request.url {
-                print("🌐 새 창 요청 감지: \(url.absoluteString)")
+                print("🌐 새 창/새 탭 요청 감지: \(url.absoluteString)")
                 print("   → 시스템 기본 브라우저로 열기")
-                
+
                 // 시스템 기본 브라우저로 열기
                 NSWorkspace.shared.open(url)
             }
-            
+
             // nil 반환 = WebView 내에서는 열지 않음
             return nil
         }
+
+        // target="_blank" 링크를 기본 브라우저에서 열기
+        func webView(_ webView: WKWebView,
+                     decidePolicyFor navigationAction: WKNavigationAction,
+                     decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+
+            // target="_blank" 링크 감지
+            if navigationAction.targetFrame == nil {
+                if let url = navigationAction.request.url {
+                    print("🌐 target='_blank' 링크 감지: \(url.absoluteString)")
+                    print("   → 시스템 기본 브라우저로 열기")
+                    NSWorkspace.shared.open(url)
+                    decisionHandler(.cancel)
+                    return
+                }
+            }
+
+            decisionHandler(.allow)
+        }
     }
-    
-    func updateNSView(_ webView: WKWebView, context: Context) {
+
+    func updateNSView(_ webView: CustomWKWebView, context: Context) {
         if let url = URL(string: url) {
             // 최신 JavaScript 설정 (macOS 11.0+)
             webView.configuration.defaultWebpagePreferences.allowsContentJavaScript = true
-            
-            let request = URLRequest(url: url)
+
+            let request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad)
             webView.load(request)
-            
-            // 3초 후 강제 새로고침 (CSS 로딩 실패 대응)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                if webView.url?.absoluteString == url.absoluteString {
-                    print("🔄 CSS 로딩 강화를 위한 새로고침 실행")
-                    webView.reload()
-                }
-            }
         }
     }
 }
