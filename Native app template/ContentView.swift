@@ -8,11 +8,106 @@
 import SwiftUI
 import WebKit
 
+// MARK: - DraggableWKWebView: Arc/VSCode 스타일 드래그 + 클릭
+/// 타이틀바 영역: 드래그로 윈도우 이동
+/// 일반 영역: 웹뷰 클릭 정상 작동
+class DraggableWKWebView: WKWebView {
+    var titlebarHeight: CGFloat {
+        // Config에서 타이틀바 높이 가져오기
+        let heightString = AppConfig.titlebar_height.replacingOccurrences(of: "px", with: "").trimmingCharacters(in: .whitespaces)
+        return CGFloat(Double(heightString) ?? 40.0)
+    }
+
+    private var mouseDownEvent: NSEvent?
+    private var isDraggingWindow = false
+    private let dragThreshold: CGFloat = 5.0  // 5픽셀 이상 이동 시 드래그로 인식
+
+    // ========================================
+    // STEP 1: mouseDown - 클릭 위치 기록
+    // ========================================
+    override func mouseDown(with event: NSEvent) {
+        let clickLocation = event.locationInWindow
+        let windowHeight = self.window?.frame.height ?? 0
+
+        // 타이틀바 영역인지 확인 (윈도우 최상단 40px)
+        if clickLocation.y >= (windowHeight - titlebarHeight) {
+            // 타이틀바 영역 클릭 → 드래그 가능성 있음
+            mouseDownEvent = event
+            isDraggingWindow = false
+            print("🎯 [Titlebar] 타이틀바 영역 클릭 감지: y=\(clickLocation.y), threshold=\(windowHeight - titlebarHeight)")
+
+            // ⚠️ 중요: mouseDown도 웹뷰에 전달 (클릭 감지를 위해 필수!)
+            super.mouseDown(with: event)
+        } else {
+            // 일반 영역 → 웹뷰로 정상 전달
+            mouseDownEvent = nil
+            super.mouseDown(with: event)
+            print("👆 [WebView] 일반 영역 클릭 → 웹뷰로 전달")
+        }
+    }
+
+    // ========================================
+    // STEP 2: mouseDragged - 드래그 vs 클릭 구분
+    // ========================================
+    override func mouseDragged(with event: NSEvent) {
+        guard let startEvent = mouseDownEvent else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        // 드래그 거리 계산
+        let startLocation = startEvent.locationInWindow
+        let currentLocation = event.locationInWindow
+        let distance = hypot(
+            currentLocation.x - startLocation.x,
+            currentLocation.y - startLocation.y
+        )
+
+        // 5픽셀 이상 이동 → 드래그로 확정
+        if distance > dragThreshold && !isDraggingWindow {
+            isDraggingWindow = true
+            print("🚀 [Titlebar] 윈도우 드래그 시작 (거리: \(distance)px)")
+        }
+
+        if isDraggingWindow {
+            // 윈도우 드래그 수행 (웹뷰에 전달 안 함)
+            self.window?.performDrag(with: event)
+        } else {
+            // 아직 드래그 아님 → 웹뷰에 전달 (드래그 제스처일 수 있음)
+            super.mouseDragged(with: event)
+        }
+    }
+
+    // ========================================
+    // STEP 3: mouseUp - 클릭 완료 처리
+    // ========================================
+    override func mouseUp(with event: NSEvent) {
+        let wasInTitlebar = (mouseDownEvent != nil)
+
+        if wasInTitlebar && !isDraggingWindow {
+            // 타이틀바에서 "클릭"만 했음 (드래그 안 함)
+            // → 웹뷰에 mouseUp 전달 (mouseDown + mouseUp = 클릭)
+            print("✅ [Titlebar] 클릭 완료 → 웹뷰로 전달")
+            super.mouseUp(with: event)
+        } else if wasInTitlebar && isDraggingWindow {
+            print("✅ [Titlebar] 윈도우 드래그 완료")
+            // 드래그 중이었으면 mouseUp 전달 안 함 (윈도우 이동만 수행)
+        } else {
+            // 일반 영역 → 웹뷰로 정상 전달
+            super.mouseUp(with: event)
+        }
+
+        // 초기화
+        mouseDownEvent = nil
+        isDraggingWindow = false
+    }
+}
+
 // MARK: - WebView Wrapper
 struct WebView: NSViewRepresentable {
     let url: String
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> DraggableWKWebView {
         // WKWebView 설정
         let configuration = WKWebViewConfiguration()
 
@@ -51,8 +146,16 @@ struct WebView: NSViewRepresentable {
         // 빠른 초기 렌더링을 위해 점진적 렌더링 활성화
         configuration.suppressesIncrementalRendering = false
 
-        // WKWebView 인스턴스 생성
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        // ========================================
+        // GPU/METAL 최적화: WKWebView는 기본적으로 GPU 가속 활성화됨
+        // ========================================
+        // Entitlements의 JIT 및 Metal 권한 덕분에 자동으로 활성화됨
+        // 별도의 설정 불필요 - WKWebView가 자동으로 최적화 수행
+
+        // ========================================
+        // DraggableWKWebView 인스턴스 생성 (Arc/VSCode 스타일)
+        // ========================================
+        let webView = DraggableWKWebView(frame: .zero, configuration: configuration)
 
         // ========================================
         // PERFORMANCE OPTIMIZATION: 네비게이션 최적화
@@ -127,7 +230,7 @@ struct WebView: NSViewRepresentable {
         }
     }
     
-    func updateNSView(_ webView: WKWebView, context: Context) {
+    func updateNSView(_ webView: DraggableWKWebView, context: Context) {
         // ========================================
         // PERFORMANCE OPTIMIZATION: 중복 로드 방지
         // ========================================
@@ -163,93 +266,28 @@ struct WebView: NSViewRepresentable {
     }
 }
 
-// MARK: - Custom Drag Area
-// NSView 확장: 창 드래그 기능
-class DraggableView: NSView {
-    override public func mouseDown(with event: NSEvent) {
-        window?.performDrag(with: event)
-    }
-}
-
-struct CustomDragArea: NSViewRepresentable {
-    let backgroundColor: String
-    
-    func makeNSView(context: Context) -> DraggableView {
-        let view = DraggableView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = hexToNSColor(backgroundColor).cgColor
-        return view
-    }
-    
-    func updateNSView(_ nsView: DraggableView, context: Context) {
-        nsView.layer?.backgroundColor = hexToNSColor(backgroundColor).cgColor
-    }
-    
-    // Hex 색상을 NSColor로 변환
-    private func hexToNSColor(_ hex: String) -> NSColor {
-        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-        var int: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&int)
-        
-        let red = CGFloat((int >> 16) & 0xFF) / 255.0
-        let green = CGFloat((int >> 8) & 0xFF) / 255.0
-        let blue = CGFloat(int & 0xFF) / 255.0
-        
-        return NSColor(red: red, green: green, blue: blue, alpha: 1.0)
-    }
-}
-
 // MARK: - Main View
 struct ContentView: View {
     var body: some View {
-        ZStack(alignment: .top) {
-            // 웹뷰 영역 (배경) - 상단에 공백 추가
-            VStack(spacing: 0) {
-                // 공백 영역
-                Color.clear
-                    .frame(height: pxToCGFloat(AppConfig.titlebar_height))
-                
-                // 웹뷰
-                if !AppConfig.targetURL.isEmpty {
-                    WebView(url: AppConfig.targetURL)
-                } else {
-                    VStack {
-                        ProgressView()
-                        Text("로딩 중...")
-                            .padding()
-                        Text("설정 오류: Config.swift에서 targetURL을 확인하세요")
-                            .font(.caption)
-                            .foregroundColor(.red)
-                    }
-                }
-            }
-            
-            // 커스텀 컬러 드래그 영역 (상단에 겹침)
+        // ========================================
+        // Arc/VSCode 스타일: 투명 타이틀바 + 전체 화면 웹뷰
+        // ========================================
+        // 웹뷰가 화면 전체를 차지하며, DraggableWKWebView가
+        // 타이틀바 영역의 드래그/클릭을 자동으로 처리합니다.
+
+        if !AppConfig.targetURL.isEmpty {
+            WebView(url: AppConfig.targetURL)
+                .ignoresSafeArea()  // Safe area 무시 → 타이틀바까지 확장
+        } else {
             VStack {
-                CustomDragArea(backgroundColor: AppConfig.titlebar_color)
-                    .frame(height: pxToCGFloat(AppConfig.titlebar_height))
-                
-                Spacer()
+                ProgressView()
+                Text("로딩 중...")
+                    .padding()
+                Text("설정 오류: Config.swift에서 targetURL을 확인하세요")
+                    .font(.caption)
+                    .foregroundColor(.red)
             }
         }
-        .ignoresSafeArea()
-        .onAppear {
-            // 디버깅 로그
-            print("📱 App Name: \(AppConfig.appName)")
-            print("🌐 Target URL: \(AppConfig.targetURL)")
-            print("🦁 User Agent: Safari 17.1 시뮬레이션 모드")
-            print("🎨 타이틀바 설정:")
-            print("   📏 높이: \(AppConfig.titlebar_height)")
-            print("   📝 제목: \(AppConfig.titlebar_title)")
-            print("   🎨 색상: \(AppConfig.titlebar_color)")
-            print("🖱️ 드래그 영역: 상단 \(AppConfig.titlebar_height) 영역 활성화")
-        }
-    }
-    
-    // px 문자열을 CGFloat로 변환
-    private func pxToCGFloat(_ pxString: String) -> CGFloat {
-        let numberString = pxString.replacingOccurrences(of: "px", with: "").trimmingCharacters(in: .whitespaces)
-        return CGFloat(Double(numberString) ?? 40.0)
     }
 }
 

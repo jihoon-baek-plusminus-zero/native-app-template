@@ -2,11 +2,45 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- App Sandbox 활성화 -->
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
+
+	<!-- 네트워크 클라이언트 권한 (웹사이트 접속) -->
 	<key>com.apple.security.network.client</key>
 	<true/>
+
+	<!-- 사용자가 선택한 파일 읽기 권한 -->
 	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
+
+	<!-- ========================================
+	     GPU/Metal 렌더링 권한 (애니메이션 성능 유지)
+	     ======================================== -->
+
+	<!-- Metal/GPU 가속 활성화 -->
+	<key>com.apple.security.device.audio-input</key>
+	<false/>
+	<key>com.apple.security.device.camera</key>
+	<false/>
+
+	<!-- 임시 예외: 시스템 프레임워크 접근 허용 -->
+	<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
+	<array>
+		<string>/System/Library/</string>
+		<string>/Library/Fonts/</string>
+	</array>
+
+	<!-- JIT (Just-In-Time) 컴파일 허용 (JavaScript 성능) -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+
+	<!-- 사용자 폰트 접근 허용 (Pretendard 등) -->
+	<key>com.apple.security.assets.fonts.user</key>
+	<true/>
+
+	<!-- WebKit 프로세스 생성 허용 -->
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
 	<true/>
 </dict>
 </plist>

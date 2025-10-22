@@ -14,7 +14,7 @@ struct AppConfig {
     static let appName = "test_app_google"
     
     /// 감쌀 웹사이트 URL
-    static let targetURL = "https://notebooklm.google.com"
+    static let targetURL = "https://client.plusminus-zero.studio"
     
     // MARK: - 타이틀바 커스터마이징
     /// 타이틀바 색상 (Hex 코드)

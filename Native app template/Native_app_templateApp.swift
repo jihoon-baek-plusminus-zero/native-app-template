@@ -29,6 +29,28 @@ struct Native_app_templateApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("🚀 [Performance] 앱 시작 - 성능 최적화 모드 활성화")
+
+        // ========================================
+        // TRANSPARENT TITLEBAR: Arc/VSCode 스타일
+        // ========================================
+        DispatchQueue.main.async {
+            if let window = NSApplication.shared.windows.first {
+                // 타이틀바 투명화
+                window.titlebarAppearsTransparent = true
+                window.titleVisibility = .hidden
+
+                // 콘텐츠를 타이틀바 아래까지 확장
+                window.styleMask.insert(.fullSizeContentView)
+
+                // 배경 투명화 (선택사항 - 웹뷰가 보이도록)
+                window.isOpaque = false
+                window.backgroundColor = .clear
+
+                print("✅ [Titlebar] 투명 타이틀바 활성화 완료")
+                print("   - fullSizeContentView: 웹뷰가 화면 전체 차지")
+                print("   - titlebarAppearsTransparent: 타이틀바 투명")
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
